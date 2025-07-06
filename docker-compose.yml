@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  cassandra:
+    image: cassandra:4.0
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+
+  python-app:
+    build: ./app
+    container_name: python-app
+    depends_on:
+      - kafka
+      - cassandra
+    volumes:
+      - ./app:/app
+      - ./data:/data
+
+
+
+  init-cassandra:
+    image: cassandra:4.0
+    container_name: init-cassandra
+    depends_on:
+      - cassandra
+    command: |
+      /bin/bash -c "
+        echo 'Waiting for Cassandra to be ready...';
+
+        # Loop นี้จะคอยตรวจสอบจนกว่า Cassandra จะพร้อมใช้งานจริงๆ
+        until cqlsh cassandra -e 'describe keyspaces'; do
+          echo 'Cassandra is unavailable - sleeping for 5s...';
+          sleep 5;
+        done;
+
+        echo 'Cassandra is up - executing CQL scripts';
+
+        cqlsh cassandra -e \"CREATE KEYSPACE IF NOT EXISTS movie_data WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };\"
+        cqlsh cassandra -e \"USE movie_data; CREATE TABLE IF NOT EXISTS movies (movie_id INT PRIMARY KEY, title TEXT, release_date TEXT, vote_average FLOAT, vote_count INT);\"
+        cqlsh cassandra -e \"USE movie_data; CREATE TABLE IF NOT EXISTS ratings (user_id INT, movie_id INT, rating FLOAT, timestamp BIGINT, PRIMARY KEY ((user_id), movie_id));\"
+
+        echo 'Cassandra initialization complete.';
+      "
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    ports:
+      - "8088:8088"
+    depends_on:
+      - cassandra
+    volumes:
+      - superset_data:/app/superset_home
+    environment:
+      - SUPERSET_SECRET_KEY=1234
+
+volumes:
+  cassandra_data: {}
+  superset_data: {}

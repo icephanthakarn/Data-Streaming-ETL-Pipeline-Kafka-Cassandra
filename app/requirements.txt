@@ -1,0 +1,5 @@
+kafka-python
+cassandra-driver
+pyspark==3.3.0
+pandas
+streamlit
